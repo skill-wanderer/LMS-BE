@@ -11,6 +11,7 @@ import {
 import { Lesson } from '../../lessons/entities/lesson.entity';
 
 export enum SubmissionStatus {
+  PENDING = 'PENDING',
   WAITING = 'WAITING',
   GRADING = 'GRADING',
   PASS = 'PASS',
@@ -25,7 +26,7 @@ export enum SubmissionStatus {
 @Index('idx_submissions_user_id', ['userId'])
 @Index('idx_pending_sub', ['userId', 'lessonId'], {
   unique: true,
-  where: `"status" = 'WAITING'`,
+  where: `"status" = 'PENDING'`,
 })
 export class Submission {
   @PrimaryGeneratedColumn('uuid')

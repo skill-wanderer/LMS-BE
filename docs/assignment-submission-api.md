@@ -162,9 +162,8 @@ The request body and responses are the same as the lesson ID endpoint above.
 
 ### Notes
 
-- If the course and lesson pair already exists, the submission is linked to that lesson.
-- If the pair does not exist yet, the backend creates the course and lesson records from the provided slugs, then creates the submission.
-- Empty or whitespace-only slugs return `404 Not Found`.
+- The course and lesson pair must already exist.
+- Missing or whitespace-only slugs return `404 Not Found`.
 
 ---
 
@@ -307,6 +306,7 @@ Returns the updated submission in the same shape as the submit response.
 - The backend validates file size against `SUBMISSIONS_MAX_FILE_SIZE_MB`.
 - Filenames are sanitized before upload.
 - A learner cannot resubmit within `SUBMISSIONS_ANTI_SPAM_WINDOW_SECONDS` from the last submission.
+- A learner cannot submit while a `PENDING` row exists for the same lesson and user.
 - A learner cannot resubmit while a `GRADING` submission exists.
 - A learner cannot resubmit after a `PASS` submission exists.
 - Previous non-passed submissions for the same lesson are marked `SUPERSEDED` when a new submission is accepted.
@@ -325,11 +325,12 @@ Returns the updated submission in the same shape as the submit response.
 ```sql
 CREATE UNIQUE INDEX idx_pending_sub
 ON submissions (user_id, lesson_id)
-WHERE (status = 'WAITING');
+WHERE (status = 'PENDING');
 ```
 
 ### Submission Status Values
 
+ - `PENDING`
 - `WAITING`
 - `GRADING`
 - `PASS`
@@ -343,12 +344,13 @@ WHERE (status = 'WAITING');
 1. Start a database transaction.
 2. Mark previous non-passed submissions for the same learner and lesson as `SUPERSEDED`.
 3. Compute the next submission version.
-4. Insert the parent submission row with `status = WAITING`.
+4. Insert the parent submission row with `status = PENDING`.
 5. Upload files to Google Drive.
 6. Insert one child row per uploaded file into `submission_files`.
 7. Verify saved file count integrity.
-8. Commit on success.
-9. Roll back and delete uploaded Drive files if synchronization fails.
+8. Transition the parent row to `WAITING` before commit.
+9. Commit on success.
+10. Roll back and delete uploaded Drive files if synchronization fails.
 
 ---
 
@@ -359,6 +361,7 @@ WHERE (status = 'WAITING');
 - Schedule: `SUBMISSIONS_CLEANUP_SCHEDULE`
 - Timezone: `SUBMISSIONS_SERVER_TIMEZONE` (fallback: `SERVER_TIMEZONE`)
 - Archives old `SUPERSEDED` records based on `SUBMISSIONS_RETENTION_DAYS`
+- Deletes associated Google Drive files before archive finalization
 - Clears `driveFileId` and `driveUrl` in `submission_files` for audit retention
 - Purges archived rows when `SUBMISSIONS_ARCHIVED_PURGE_DAYS` is greater than `0`
 

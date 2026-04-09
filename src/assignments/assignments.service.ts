@@ -13,7 +13,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
-import { Course } from '../courses/entities/course.entity';
 import {
   Submission,
   SubmissionStatus,
@@ -36,8 +35,6 @@ export class AssignmentsService {
 
   constructor(
     private readonly dataSource: DataSource,
-    @InjectRepository(Course)
-    private readonly courseRepo: Repository<Course>,
     @InjectRepository(Lesson)
     private readonly lessonRepo: Repository<Lesson>,
     @InjectRepository(Submission)
@@ -100,17 +97,7 @@ export class AssignmentsService {
       order: { createdAt: 'DESC' },
     });
 
-    const antiSpamExemptStatuses = new Set<SubmissionStatus>([
-      SubmissionStatus.WAITING,
-      SubmissionStatus.FAIL,
-    ]);
-    const lastStatus = lastSubmission
-      ? this.normalizeSubmissionStatus(lastSubmission.status)
-      : null;
-    const shouldApplyAntiSpam = !lastStatus || !antiSpamExemptStatuses.has(lastStatus);
-
     if (
-      shouldApplyAntiSpam &&
       lastSubmission &&
       Date.now() - lastSubmission.createdAt.getTime() < antiSpamWindowSeconds * 1000
     ) {
@@ -122,6 +109,7 @@ export class AssignmentsService {
 
     const blockingSubmission = await this.submissionRepo.findOne({
       where: [
+        { lessonId, userId, status: SubmissionStatus.PENDING },
         { lessonId, userId, status: SubmissionStatus.GRADING },
       ],
       select: { status: true },
@@ -129,7 +117,9 @@ export class AssignmentsService {
     });
     if (blockingSubmission) {
       const blockingMessage =
-        blockingSubmission.status === SubmissionStatus.GRADING
+        blockingSubmission.status === SubmissionStatus.PENDING
+          ? 'A submission is already being processed for this lesson'
+          : blockingSubmission.status === SubmissionStatus.GRADING
           ? 'This submission is being graded and cannot be resubmitted yet'
           : 'A submission is currently blocked for resubmission';
 
@@ -180,7 +170,7 @@ export class AssignmentsService {
         queryRunner.manager.create(Submission, {
           lessonId,
           userId,
-          status: SubmissionStatus.WAITING,
+          status: SubmissionStatus.PENDING,
           version: nextVersion,
           contentText: normalizedText || null,
           createdBy: userId,
@@ -235,9 +225,13 @@ export class AssignmentsService {
         );
       }
 
+      submission.status = SubmissionStatus.WAITING;
+      submission.updatedBy = userId;
+      const finalizedSubmission = await queryRunner.manager.save(submission);
+
       await queryRunner.commitTransaction();
 
-      return this.toSubmissionResponse(submission, createdFiles);
+      return this.toSubmissionResponse(finalizedSubmission, createdFiles);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       await this.safeDeleteDriveFiles(uploadedDriveFileIds);
@@ -254,7 +248,7 @@ export class AssignmentsService {
             })
             .where('user_id = :userId', { userId })
             .andWhere('lesson_id = :lessonId', { lessonId })
-            .andWhere('status = :waiting', { waiting: SubmissionStatus.WAITING })
+            .andWhere('status = :pending', { pending: SubmissionStatus.PENDING })
             .execute();
 
           return this.submitAssignment(
@@ -297,7 +291,7 @@ export class AssignmentsService {
     username?: string,
     retryCount = 0,
   ): Promise<AssignmentSubmissionResponseDto> {
-    const lesson = await this.findOrCreateLessonBySlugs(courseSlug, lessonSlug);
+    const lesson = await this.findLessonBySlugsOrFail(courseSlug, lessonSlug);
 
     return this.submitAssignment(
       lesson.id,
@@ -368,73 +362,6 @@ export class AssignmentsService {
     return lesson;
   }
 
-  private async findOrCreateLessonBySlugs(
-    courseSlug: string,
-    lessonSlug: string,
-  ): Promise<Pick<Lesson, 'id'>> {
-    const normalized = this.normalizeSlugs(courseSlug, lessonSlug);
-
-    const existingLesson = await this.findLessonBySlugs(
-      normalized.courseSlug,
-      normalized.lessonSlug,
-    );
-
-    if (existingLesson) {
-      return existingLesson;
-    }
-
-    let course = await this.courseRepo.findOne({
-      where: { slug: normalized.courseSlug },
-    });
-
-    if (!course) {
-      course = await this.courseRepo.save(
-        this.courseRepo.create({
-          slug: normalized.courseSlug,
-          title: this.slugToTitle(normalized.courseSlug),
-        }),
-      );
-    }
-
-    try {
-      const createdLesson = await this.lessonRepo.save(
-        this.lessonRepo.create({
-          slug: normalized.lessonSlug,
-          title: this.slugToTitle(normalized.lessonSlug),
-          courseId: course.id,
-        }),
-      );
-
-      return { id: createdLesson.id };
-    } catch (error) {
-      if (!(error instanceof QueryFailedError)) {
-        throw error;
-      }
-
-      const retryExisting = await this.lessonRepo
-        .createQueryBuilder('lesson')
-        .innerJoin('lesson.course', 'course')
-        .select(['lesson.id'])
-        .where('course.slug = :courseSlug', { courseSlug: normalized.courseSlug })
-        .andWhere('lesson.slug = :lessonSlug', { lessonSlug: normalized.lessonSlug })
-        .getOne();
-
-      if (retryExisting) {
-        return retryExisting;
-      }
-
-      throw error;
-    }
-  }
-
-  private slugToTitle(slug: string): string {
-    return slug
-      .split('-')
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ');
-  }
-
   async getSubmissionState(
     lessonId: string,
     userId: string,
@@ -479,6 +406,7 @@ export class AssignmentsService {
 
     const currentStatus = this.normalizeSubmissionStatus(submission.status);
     const allowedTransitions: Record<SubmissionStatus, SubmissionStatus[]> = {
+      [SubmissionStatus.PENDING]: [SubmissionStatus.WAITING],
       [SubmissionStatus.WAITING]: [SubmissionStatus.GRADING, SubmissionStatus.FAIL, SubmissionStatus.PASS],
       [SubmissionStatus.GRADING]: [SubmissionStatus.PASS, SubmissionStatus.FAIL],
       [SubmissionStatus.PASS]: [],
@@ -528,6 +456,31 @@ export class AssignmentsService {
     let archivedCount = 0;
 
     for (const submission of candidates) {
+      const submissionFiles = await this.submissionFileRepo.find({
+        where: { submissionId: submission.id },
+      });
+
+      const driveFileIds = submissionFiles
+        .map((file) => file.driveFileId)
+        .filter((driveFileId): driveFileId is string => Boolean(driveFileId));
+
+      let driveDeletionFailed = false;
+      for (const driveFileId of driveFileIds) {
+        try {
+          await this.assignmentStorageService.deleteDriveFile(driveFileId);
+        } catch (error) {
+          driveDeletionFailed = true;
+          this.logger.warn(
+            `Failed to delete Drive file ${driveFileId} for submission ${submission.id}: ${(error as Error)?.message || 'unknown error'}`,
+          );
+          break;
+        }
+      }
+
+      if (driveDeletionFailed) {
+        continue;
+      }
+
       await this.dataSource.transaction(async (manager) => {
         await manager
           .createQueryBuilder()
@@ -710,6 +663,7 @@ export class AssignmentsService {
 
   private toSubmissionStateStatus(status: SubmissionStatus | string): SubmissionStateStatus {
     switch (this.normalizeSubmissionStatus(status)) {
+      case SubmissionStatus.PENDING:
       case SubmissionStatus.WAITING:
         return SubmissionStateStatus.WAITING;
       case SubmissionStatus.GRADING:
@@ -725,6 +679,7 @@ export class AssignmentsService {
 
   private canSubmitFromStatus(status: SubmissionStatus | string): boolean {
     switch (this.normalizeSubmissionStatus(status)) {
+      case SubmissionStatus.PENDING:
       case SubmissionStatus.GRADING:
       case SubmissionStatus.PASS:
         return false;

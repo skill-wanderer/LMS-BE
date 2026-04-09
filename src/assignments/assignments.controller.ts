@@ -65,7 +65,6 @@ export class AssignmentsController {
   }
 
   @Get('courses/:courseSlug/lessons/:lessonSlug/submissions/state')
-  @Roles('learner')
   @ApiOperation({
     summary: 'Get current submission state for a lesson',
   })
@@ -91,7 +90,6 @@ export class AssignmentsController {
   }
 
   @Post('lessons/:lessonId/submissions')
-  @Roles('learner')
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
@@ -158,7 +156,6 @@ export class AssignmentsController {
   }
 
   @Post('courses/:courseSlug/lessons/:lessonSlug/submissions')
-  @Roles('learner')
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
@@ -241,3 +238,4 @@ export class AssignmentsController {
     }
   }
 }
+
