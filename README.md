@@ -67,12 +67,12 @@ Create a `.env` file in the project root:
 ```env
 # Database
 DB_HOST=localhost
-DB_PORT=5433
+DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=postgres
 DB_NAME=lms
 # Optional: use this instead of DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME
-# DATABASE_URL=postgresql://postgres:postgres@localhost:5433/lms
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/lms
 DB_SYNCHRONIZE=true
 DB_LOGGING=false
 DB_SSL=false
@@ -135,8 +135,6 @@ docker build -t lms-be .
 # Run container
 docker run -p 3000:3000 --env-file .env lms-be
 ```
-
-For local PostgreSQL via docker-compose, the app connects to host port `5433`.
 
 ## API Endpoints
 
