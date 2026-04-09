@@ -18,6 +18,7 @@ A Learning Management System backend built with **NestJS**, **TypeORM**, **Postg
 - **Role-Based Access Control** — `@Roles()` decorator backed by a global `RolesGuard` (supports realm and client roles)
 - **Lesson Completion Tracking** — Mark/unmark lessons as complete and query per-lesson or per-course progress
 - **Course Progress** — Aggregated progress percentage across all lessons in a course
+- **Lesson Submission API (Versioned)** — Transactional multi-file submissions with pending locks, anti-spam, and Drive cleanup workers
 - **Swagger UI** — Interactive API documentation with Bearer token support
 
 ## Project Structure
@@ -66,10 +67,15 @@ Create a `.env` file in the project root:
 ```env
 # Database
 DB_HOST=localhost
-DB_PORT=5432
+DB_PORT=5433
 DB_USERNAME=postgres
 DB_PASSWORD=postgres
 DB_NAME=lms
+# Optional: use this instead of DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5433/lms
+DB_SYNCHRONIZE=true
+DB_LOGGING=false
+DB_SSL=false
 
 # Keycloak
 KEYCLOAK_BASE_URL=http://localhost:8080
@@ -81,6 +87,28 @@ KEYCLOAK_CLIENT_ID=lms-backend
 
 # Application
 PORT=3000
+
+# Submission Flow Configuration
+SUBMISSIONS_MAX_FILE_SIZE_MB=10
+SUBMISSIONS_MAX_FILES=10
+SUBMISSIONS_ALLOWED_MIME_TYPES=application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg
+SUBMISSIONS_ANTI_SPAM_WINDOW_SECONDS=30
+SUBMISSIONS_RETENTION_DAYS=30
+SUBMISSIONS_ARCHIVED_PURGE_DAYS=0
+SUBMISSIONS_CLEANUP_BATCH_SIZE=100
+SUBMISSIONS_ORPHAN_SCAN_BATCH_SIZE=100
+SUBMISSIONS_CLEANUP_SCHEDULE=*/5 * * * *
+SUBMISSIONS_ORPHAN_SCAN_SCHEDULE=*/10 * * * *
+SUBMISSIONS_SYSTEM_ACTOR_ID=00000000-0000-0000-0000-000000000000
+SUBMISSIONS_SERVER_TIMEZONE=UTC
+
+# Google Drive
+# Set false to run/test with database only (no Drive credentials needed)
+DRIVE_UPLOAD_ENABLED=false
+DRIVE_OAUTH_CLIENT_ID=
+DRIVE_OAUTH_CLIENT_SECRET=
+DRIVE_OAUTH_REFRESH_TOKEN=
+DRIVE_FOLDER_ID=
 ```
 
 > See [docs/keycloak-setup.md](docs/keycloak-setup.md) for detailed Keycloak configuration steps.
@@ -108,6 +136,8 @@ docker build -t lms-be .
 docker run -p 3000:3000 --env-file .env lms-be
 ```
 
+For local PostgreSQL via docker-compose, the app connects to host port `5433`.
+
 ## API Endpoints
 
 ### Auth
@@ -124,6 +154,12 @@ docker run -p 3000:3000 --env-file .env lms-be
 | `DELETE`  | `/courses/{courseSlug}/lessons/{lessonSlug}/complete`    | Unmark lesson completion     |
 | `GET`    | `/courses/{courseSlug}/lessons/{lessonSlug}/complete`    | Get lesson completion status |
 | `GET`    | `/courses/{courseSlug}/progress`                         | Get course progress          |
+
+### Lesson Submissions
+
+| Method   | Path                                      | Description                                  |
+|----------|-------------------------------------------|----------------------------------------------|
+| `POST`   | `/lessons/{lessonId}/submissions`         | Submit lesson files/text with transactional integrity |
 
 > All endpoints (except those decorated with `@Public()`) require a valid Keycloak JWT Bearer token.
 
@@ -144,6 +180,7 @@ docker run -p 3000:3000 --env-file .env lms-be
 
 - [Keycloak Setup Guide](docs/keycloak-setup.md)
 - [Lesson Completion API](docs/lesson-completion-api.md)
+- [Assignment Submission API](docs/assignment-submission-api.md)
 
 ## License
 

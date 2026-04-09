@@ -1,12 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AuthenticatedUser } from './interfaces/keycloak-token.interface';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-
-  constructor(private readonly configService: ConfigService) {}
 
   /**
    * Returns the authenticated user's profile from the JWT token.
