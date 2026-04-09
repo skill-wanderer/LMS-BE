@@ -133,7 +133,7 @@ export class AssignmentsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden (already passed)' })
   @ApiResponse({ status: 404, description: 'Lesson not found' })
-  @ApiResponse({ status: 429, description: 'Rate limited or lesson is waiting/grading' })
+  @ApiResponse({ status: 429, description: 'Rate limited or lesson submission is pending/grading' })
   @ApiResponse({ status: 413, description: 'File is too large' })
   @ApiResponse({ status: 415, description: 'Unsupported file type' })
   async submitAssignmentByLessonId(
