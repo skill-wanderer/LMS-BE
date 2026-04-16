@@ -28,6 +28,7 @@ import {
   SubmissionStateStatus,
 } from './dto/assignment-submission-response.dto';
 import { SubmissionFileEntity } from './entities/submission-file.entity';
+import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 
 @Injectable()
 export class AssignmentsService {
@@ -44,6 +45,24 @@ export class AssignmentsService {
     private readonly assignmentStorageService: AssignmentStorageService,
     private readonly configService: ConfigService,
   ) {}
+
+  getSubmissionConstraints(): SubmissionConstraintsDto {
+    return {
+      maxFiles: this.configService.get<number>('submissions.maxFiles', 10),
+      maxFileSizeMb: this.configService.get<number>('submissions.maxFileSizeMb', 10),
+      allowedMimeTypes: this.configService.get<string[]>(
+        'submissions.allowedMimeTypes',
+        [
+          'application/pdf',
+          'text/plain',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'image/png',
+          'image/jpeg',
+        ],
+      ),
+    };
+  }
 
   async submitAssignment(
     lessonId: string,
@@ -435,7 +454,7 @@ export class AssignmentsService {
 
   async cleanupSupersededSubmissions(): Promise<number> {
     const retentionDays = this.configService.get<number>('submissions.retentionDays', 30);
-    const batchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
+    const cleanupBatchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
     const systemActor = this.configService.get<string>(
       'submissions.systemActorId',
       '00000000-0000-0000-0000-000000000000',
@@ -450,7 +469,7 @@ export class AssignmentsService {
         retentionDays,
       })
       .orderBy('submission.updated_at', 'ASC')
-      .limit(batchSize)
+      .limit(cleanupBatchSize)
       .getMany();
 
     let archivedCount = 0;
@@ -519,8 +538,8 @@ export class AssignmentsService {
       return 0;
     }
 
-    const batchSize = this.configService.get<number>('submissions.orphanScanBatchSize', 100);
-    const candidates = await this.assignmentStorageService.listOrphanCandidates(batchSize);
+    const orphanScanBatchSize = this.configService.get<number>('submissions.orphanScanBatchSize', 100);
+    const candidates = await this.assignmentStorageService.listOrphanCandidates(orphanScanBatchSize);
     let deletedCount = 0;
 
     for (const candidate of candidates) {
@@ -543,7 +562,7 @@ export class AssignmentsService {
       return 0;
     }
 
-    const batchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
+    const cleanupBatchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
 
     const candidates = await this.submissionRepo
       .createQueryBuilder('submission')
@@ -555,7 +574,7 @@ export class AssignmentsService {
         purgeDays,
       })
       .orderBy('submission.updated_at', 'ASC')
-      .limit(batchSize)
+      .limit(cleanupBatchSize)
       .getRawMany<{ id: string }>();
 
     if (candidates.length === 0) {
@@ -563,6 +582,13 @@ export class AssignmentsService {
     }
 
     const ids = candidates.map((candidate) => candidate.id);
+
+    await this.submissionFileRepo
+      .createQueryBuilder()
+      .delete()
+      .from(SubmissionFileEntity)
+      .where('submission_id IN (:...ids)', { ids })
+      .execute();
 
     await this.submissionRepo
       .createQueryBuilder()

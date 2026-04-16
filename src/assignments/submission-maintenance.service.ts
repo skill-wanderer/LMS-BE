@@ -34,6 +34,8 @@ export class SubmissionMaintenanceService implements OnModuleInit {
     );
     const driveEnabled = this.configService.get<boolean>('submissions.driveEnabled', false);
 
+    this.logger.log('Submission background maintenance is enabled');
+
     this.registerJob(
       'submission.cleanup.superseded',
       schedule,

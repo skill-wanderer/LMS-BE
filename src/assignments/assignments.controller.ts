@@ -31,12 +31,26 @@ import {
   AssignmentSubmissionStateDto,
 } from './dto/assignment-submission-response.dto';
 import { UpdateSubmissionStatusDto } from './dto/update-submission-status.dto';
+import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 
 @ApiTags('Lesson Submissions')
 @ApiBearerAuth('keycloak')
 @Controller()
 export class AssignmentsController {
   constructor(private readonly assignmentsService: AssignmentsService) {}
+
+  @Get('submissions/constraints')
+  @ApiOperation({
+    summary: 'Get submission upload constraints',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current submission upload constraints',
+    type: SubmissionConstraintsDto,
+  })
+  getSubmissionConstraints(): SubmissionConstraintsDto {
+    return this.assignmentsService.getSubmissionConstraints();
+  }
 
   @Patch('submissions/:submissionId/status')
   @Roles('admin')

@@ -23,7 +23,7 @@ export class SubmissionFileEntity {
   @Column({ name: 'submission_id', type: 'uuid' })
   submissionId!: string;
 
-  @ManyToOne(() => Submission, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Submission)
   @JoinColumn({ name: 'submission_id' })
   submission!: Submission;
 
