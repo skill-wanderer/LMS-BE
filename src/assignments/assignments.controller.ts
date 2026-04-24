@@ -1,3 +1,4 @@
+
 import {
   BadRequestException,
   Body,
@@ -33,11 +34,33 @@ import {
 import { UpdateSubmissionStatusDto } from './dto/update-submission-status.dto';
 import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 
+
 @ApiTags('Lesson Submissions')
 @ApiBearerAuth('keycloak')
 @Controller()
 export class AssignmentsController {
   constructor(private readonly assignmentsService: AssignmentsService) {}
+
+  @Get('courses/:courseSlug/lessons/:lessonSlug/submissions/latest')
+  @ApiOperation({
+    summary: 'Get latest submission for a lesson by course and lesson slug',
+  })
+  @ApiParam({ name: 'courseSlug', description: 'Course slug' })
+  @ApiParam({ name: 'lessonSlug', description: 'Lesson slug' })
+  @ApiResponse({
+    status: 200,
+    description: 'Latest submission for this lesson',
+    type: AssignmentSubmissionResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Course or lesson not found' })
+  async getLatestSubmissionBySlugs(
+    @Param('courseSlug') courseSlug: string,
+    @Param('lessonSlug') lessonSlug: string,
+    @CurrentUser('id') userId: string,
+  ): Promise<AssignmentSubmissionResponseDto | null> {
+    return this.assignmentsService.getLatestSubmissionBySlugs(courseSlug, lessonSlug, userId);
+  }
 
   @Get('submissions/constraints')
   @ApiOperation({
