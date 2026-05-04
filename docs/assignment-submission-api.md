@@ -126,7 +126,7 @@ At least one of `contentText` or `files` must be provided.
 ```json
 {
   "statusCode": 415,
-  "message": "File malware.exe has unsupported MIME type application/x-msdownload"
+  "message": "Unsupported file type: application/x-msdownload"
 }
 ```
 
@@ -202,7 +202,7 @@ If a submission exists:
 ```json
 {
   "status": "WAITING",
-  "canSubmit": false,
+  "canSubmit": true,
   "latestSubmission": {
     "submissionId": "96ca26c3-d92c-474e-98e3-f5fbf23e7ae7",
     "lessonId": "a54fdb6f-a2cf-4c78-8266-d3bf25d0f1aa",
@@ -300,7 +300,7 @@ Returns the updated submission in the same shape as the submit response.
 ## Validation And Workflow Rules
 
 - The request must be authenticated.
-- Submission endpoints require the `learner` role.
+- Submission creation and submission-state endpoints require authentication but do not enforce a specific role at the controller level.
 - Status update endpoint requires the `admin` role.
 - `fileCount` must match the number of uploaded files when provided.
 - The backend validates MIME type against `SUBMISSIONS_ALLOWED_MIME_TYPES`.

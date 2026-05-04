@@ -130,6 +130,9 @@ export class AssignmentsController {
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
+      limits: {
+        fileSize: 10 * 1024 * 1024,
+      },
     }),
   )
   @ApiOperation({
@@ -196,6 +199,9 @@ export class AssignmentsController {
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
+      limits: {
+        fileSize: 10 * 1024 * 1024,
+      },
     }),
   )
   @ApiOperation({

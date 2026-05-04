@@ -32,298 +32,6 @@ import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 
 @Injectable()
 export class AssignmentsService {
-    getSubmissionConstraints(): SubmissionConstraintsDto {
-      return {
-        maxFiles: this.configService.get<number>('submissions.maxFiles', 10),
-        maxFileSizeMb: this.configService.get<number>('submissions.maxFileSizeMb', 10),
-        allowedMimeTypes: this.configService.get<string[]>(
-          'submissions.allowedMimeTypes',
-          [
-            'application/pdf',
-            'text/plain',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'image/png',
-            'image/jpeg',
-          ],
-        ),
-      };
-    }
-
-
-    async getSubmissionStateBySlugs(
-      courseSlug: string,
-      lessonSlug: string,
-      userId: string,
-    ): Promise<AssignmentSubmissionStateDto> {
-      const lesson = await this.findOrCreateLessonBySlugs(courseSlug, lessonSlug);
-      return this.getSubmissionState(lesson.id, userId);
-    }
-
-    async submitAssignment(
-      lessonId: string,
-      userId: string,
-      contentText: string | undefined,
-      files: SubmissionFile[] = [],
-      fileCount?: number,
-      username?: string,
-    ): Promise<AssignmentSubmissionResponseDto> {
-      // Use the main logic from the existing implementation
-      // ...existing code for submitAssignment...
-      // To avoid duplication, call the main implementation with default retryCount and folderContext
-      return this._submitAssignmentInternal(lessonId, userId, contentText, files, fileCount, username, undefined, 0);
-    }
-
-
-    async submitAssignmentBySlugs(
-      courseSlug: string,
-      lessonSlug: string,
-      userId: string,
-      contentText: string | undefined,
-      files: SubmissionFile[] = [],
-      fileCount?: number,
-      username?: string,
-    ): Promise<AssignmentSubmissionResponseDto> {
-      const lesson = await this.findOrCreateLessonBySlugs(courseSlug, lessonSlug);
-      return this._submitAssignmentInternal(lesson.id, userId, contentText, files, fileCount, username, { courseSlug, lessonSlug }, 0);
-    }
-
-    // Internal implementation to avoid code duplication
-    private async _submitAssignmentInternal(
-      lessonId: string,
-      userId: string,
-      contentText: string | undefined,
-      files: SubmissionFile[] = [],
-      fileCount?: number,
-      username?: string,
-      folderContext?: { courseSlug?: string; lessonSlug?: string },
-      retryCount = 0,
-    ): Promise<AssignmentSubmissionResponseDto> {
-      const normalizedText = contentText?.trim() || '';
-      const uploadedFiles = files || [];
-      const maxFiles = this.configService.get<number>('submissions.maxFiles', 10);
-
-      if (uploadedFiles.length > maxFiles) {
-        throw new BadRequestException(
-          `File count exceeds limit (${maxFiles})`,
-        );
-      }
-
-      if (fileCount !== undefined && fileCount !== uploadedFiles.length) {
-        throw new BadRequestException(
-          `fileCount mismatch: expected ${fileCount}, received ${uploadedFiles.length}`,
-        );
-      }
-
-      if (!normalizedText && uploadedFiles.length === 0) {
-        throw new BadRequestException(
-          'Either contentText or files must be provided',
-        );
-      }
-
-      const lessonExists = await this.lessonRepo.exists({
-        where: { id: lessonId },
-      });
-
-      if (!lessonExists) {
-        throw new NotFoundException('Lesson not found');
-      }
-
-      this.validateFiles(uploadedFiles);
-
-      const antiSpamWindowSeconds = this.configService.get<number>(
-        'submissions.antiSpamWindowSeconds',
-        30,
-      );
-      const lastSubmission = await this.submissionRepo.findOne({
-        where: { lessonId, userId },
-        select: { createdAt: true, status: true },
-        order: { createdAt: 'DESC' },
-      });
-
-      if (
-        lastSubmission &&
-        Date.now() - lastSubmission.createdAt.getTime() < antiSpamWindowSeconds * 1000
-      ) {
-        throw new HttpException(
-          `Please wait ${antiSpamWindowSeconds}s before creating a new submission`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-
-      const blockingSubmission = await this.submissionRepo.findOne({
-        where: [
-          { lessonId, userId, status: SubmissionStatus.PENDING },
-          { lessonId, userId, status: SubmissionStatus.GRADING },
-        ],
-        select: { status: true },
-        order: { createdAt: 'DESC' },
-      });
-      if (blockingSubmission) {
-        const blockingMessage =
-          blockingSubmission.status === SubmissionStatus.PENDING
-            ? 'A submission is already being processed for this lesson'
-            : blockingSubmission.status === SubmissionStatus.GRADING
-            ? 'This submission is being graded and cannot be resubmitted yet'
-            : 'A submission is currently blocked for resubmission';
-
-        throw new HttpException(
-          blockingMessage,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-
-      const passedExists = await this.submissionRepo.exists({
-        where: { lessonId, userId, status: SubmissionStatus.PASS },
-      });
-      if (passedExists) {
-        throw new ForbiddenException(
-          'Resubmission is prohibited after the lesson is passed',
-        );
-      }
-
-      const queryRunner = this.dataSource.createQueryRunner();
-      const uploadedDriveFileIds: string[] = [];
-      await queryRunner.connect();
-      await queryRunner.startTransaction();
-
-      try {
-        await queryRunner.manager
-          .createQueryBuilder()
-          .update(Submission)
-          .set({
-            status: SubmissionStatus.SUPERSEDED,
-            updatedBy: userId,
-            updatedAt: () => 'NOW()',
-          })
-          .where('user_id = :userId', { userId })
-          .andWhere('lesson_id = :lessonId', { lessonId })
-          .andWhere('status != :passed', { passed: SubmissionStatus.PASS })
-          .execute();
-
-        const versionRaw = await queryRunner.manager
-          .createQueryBuilder(Submission, 'submission')
-          .select('COALESCE(MAX(submission.version), 0)', 'maxVersion')
-          .where('submission.user_id = :userId', { userId })
-          .andWhere('submission.lesson_id = :lessonId', { lessonId })
-          .getRawOne<{ maxVersion: string }>();
-
-        const nextVersion = Number(versionRaw?.maxVersion || 0) + 1;
-
-        const submission = await queryRunner.manager.save(
-          queryRunner.manager.create(Submission, {
-            lessonId,
-            userId,
-            status: SubmissionStatus.PENDING,
-            version: nextVersion,
-            contentText: normalizedText || null,
-            createdBy: userId,
-            updatedBy: null,
-          }),
-        );
-
-        const createdFiles: SubmissionFileEntity[] = [];
-        const submissionFolderId = uploadedFiles.length > 0
-          ? await this.assignmentStorageService.ensureSubmissionFolder({
-            submissionId: submission.id,
-            version: submission.version,
-            username,
-            courseSlug: folderContext?.courseSlug,
-            lessonSlug: folderContext?.lessonSlug,
-            lessonId,
-          })
-          : null;
-
-        for (const file of uploadedFiles) {
-          const sanitizedFileName = this.sanitizeFilename(file.originalname);
-          const driveResult = await this.assignmentStorageService.uploadSubmissionFile(
-            file,
-            sanitizedFileName,
-            submission.id,
-            submissionFolderId || undefined,
-          );
-          uploadedDriveFileIds.push(driveResult.driveFileId);
-
-          const fileEntity = await queryRunner.manager.save(
-            queryRunner.manager.create(SubmissionFileEntity, {
-              submissionId: submission.id,
-              fileName: sanitizedFileName,
-              fileMimetype: driveResult.fileMimetype,
-              driveFileId: driveResult.driveFileId,
-              driveUrl: driveResult.driveUrl,
-              createdBy: userId,
-              updatedBy: null,
-            }),
-          );
-
-          createdFiles.push(fileEntity);
-        }
-
-        const savedFileCount = await queryRunner.manager.count(SubmissionFileEntity, {
-          where: { submissionId: submission.id },
-        });
-
-        if (savedFileCount !== uploadedFiles.length) {
-          throw new ServiceUnavailableException(
-            'Submission integrity check failed',
-          );
-        }
-
-        submission.status = SubmissionStatus.WAITING;
-        submission.updatedBy = userId;
-        const finalizedSubmission = await queryRunner.manager.save(submission);
-
-        await queryRunner.commitTransaction();
-
-        return this.toSubmissionResponse(finalizedSubmission, createdFiles);
-      } catch (error) {
-        await queryRunner.rollbackTransaction();
-        await this.safeDeleteDriveFiles(uploadedDriveFileIds);
-
-        if (this.isWaitingUniqueViolation(error)) {
-          if (retryCount < 1) {
-            await this.submissionRepo
-              .createQueryBuilder()
-              .update(Submission)
-              .set({
-                status: SubmissionStatus.SUPERSEDED,
-                updatedBy: userId,
-                updatedAt: () => 'NOW()',
-              })
-              .where('user_id = :userId', { userId })
-              .andWhere('lesson_id = :lessonId', { lessonId })
-              .andWhere('status = :pending', { pending: SubmissionStatus.PENDING })
-              .execute();
-
-            return this._submitAssignmentInternal(
-              lessonId,
-              userId,
-              contentText,
-              files,
-              fileCount,
-              username,
-              folderContext,
-              retryCount + 1,
-            );
-          }
-
-          throw new HttpException(
-            'A waiting submission already exists for this lesson',
-            HttpStatus.TOO_MANY_REQUESTS,
-          );
-        }
-
-        if (error instanceof ServiceUnavailableException) {
-          throw error;
-        }
-
-        throw new ServiceUnavailableException(
-          'Submission synchronization failed. Please retry later.',
-        );
-      } finally {
-        await queryRunner.release();
-      }
-    }
   private readonly logger = new Logger(AssignmentsService.name);
 
   constructor(
@@ -338,41 +46,339 @@ export class AssignmentsService {
     private readonly configService: ConfigService,
   ) {}
 
-
-
-
-
-  // Helper to find lesson by slugs or throw NotFoundException
-
-  // Helper to find or create course/lesson by slugs
-  private async findOrCreateLessonBySlugs(courseSlug: string, lessonSlug: string): Promise<Lesson> {
-    let course = await this.lessonRepo.manager.getRepository('Course').findOne({ where: { slug: courseSlug } });
-    if (!course) {
-      course = await this.lessonRepo.manager.getRepository('Course').save({ slug: courseSlug, title: courseSlug });
-    }
-    let lesson = await this.lessonRepo.findOne({ where: { slug: lessonSlug, course: { id: course.id } }, relations: ['course'] });
-    if (!lesson) {
-      lesson = await this.lessonRepo.save({ slug: lessonSlug, title: lessonSlug, course, courseId: course.id });
-    }
-    return lesson;
+  getSubmissionConstraints(): SubmissionConstraintsDto {
+    return {
+      maxFiles: this.configService.get<number>('submissions.maxFiles', 10),
+      maxFileSizeMb: this.configService.get<number>('submissions.maxFileSizeMb', 10),
+      allowedMimeTypes: this.configService.get<string[]>(
+        'submissions.allowedMimeTypes',
+        [
+          'application/pdf',
+          'text/plain',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'image/png',
+          'image/jpeg',
+        ],
+      ),
+    };
   }
 
-  async getLatestSubmissionBySlugs(
+  async submitAssignment(
+    lessonId: string,
+    userId: string,
+    contentText: string | undefined,
+    files: SubmissionFile[] = [],
+    fileCount?: number,
+    username?: string,
+    folderContext?: { courseSlug?: string; lessonSlug?: string },
+    retryCount = 0,
+  ): Promise<AssignmentSubmissionResponseDto> {
+    const normalizedText = contentText?.trim() || '';
+    const uploadedFiles = files || [];
+    const maxFiles = this.configService.get<number>('submissions.maxFiles', 10);
+
+    if (uploadedFiles.length > maxFiles) {
+      throw new BadRequestException(
+        `File count exceeds limit (${maxFiles})`,
+      );
+    }
+
+    if (fileCount !== undefined && fileCount !== uploadedFiles.length) {
+      throw new BadRequestException(
+        `fileCount mismatch: expected ${fileCount}, received ${uploadedFiles.length}`,
+      );
+    }
+
+    if (!normalizedText && uploadedFiles.length === 0) {
+      throw new BadRequestException(
+        'Either contentText or files must be provided',
+      );
+    }
+
+    const lessonExists = await this.lessonRepo.exists({
+      where: { id: lessonId },
+    });
+
+    if (!lessonExists) {
+      throw new NotFoundException('Lesson not found');
+    }
+
+    this.validateFiles(uploadedFiles);
+
+    const antiSpamWindowSeconds = this.configService.get<number>(
+      'submissions.antiSpamWindowSeconds',
+      30,
+    );
+    const lastSubmission = await this.submissionRepo.findOne({
+      where: { lessonId, userId },
+      select: { createdAt: true, status: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (
+      lastSubmission &&
+      Date.now() - lastSubmission.createdAt.getTime() < antiSpamWindowSeconds * 1000
+    ) {
+      throw new HttpException(
+        `Please wait ${antiSpamWindowSeconds}s before creating a new submission`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const blockingSubmission = await this.submissionRepo.findOne({
+      where: [
+        { lessonId, userId, status: SubmissionStatus.PENDING },
+        { lessonId, userId, status: SubmissionStatus.GRADING },
+      ],
+      select: { status: true },
+      order: { createdAt: 'DESC' },
+    });
+    if (blockingSubmission) {
+      const blockingMessage =
+        blockingSubmission.status === SubmissionStatus.PENDING
+          ? 'A submission is already being processed for this lesson'
+          : blockingSubmission.status === SubmissionStatus.GRADING
+          ? 'This submission is being graded and cannot be resubmitted yet'
+          : 'A submission is currently blocked for resubmission';
+
+      throw new HttpException(
+        blockingMessage,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const passedExists = await this.submissionRepo.exists({
+      where: { lessonId, userId, status: SubmissionStatus.PASS },
+    });
+    if (passedExists) {
+      throw new ForbiddenException(
+        'Resubmission is prohibited after the lesson is passed',
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    const uploadedDriveFileIds: string[] = [];
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(Submission)
+        .set({
+          status: SubmissionStatus.SUPERSEDED,
+          updatedBy: userId,
+          updatedAt: () => 'NOW()',
+        })
+        .where('user_id = :userId', { userId })
+        .andWhere('lesson_id = :lessonId', { lessonId })
+        .andWhere('status != :passed', { passed: SubmissionStatus.PASS })
+        .execute();
+
+      const versionRaw = await queryRunner.manager
+        .createQueryBuilder(Submission, 'submission')
+        .select('COALESCE(MAX(submission.version), 0)', 'maxVersion')
+        .where('submission.user_id = :userId', { userId })
+        .andWhere('submission.lesson_id = :lessonId', { lessonId })
+        .getRawOne<{ maxVersion: string }>();
+
+      const nextVersion = Number(versionRaw?.maxVersion || 0) + 1;
+
+      const submission = await queryRunner.manager.save(
+        queryRunner.manager.create(Submission, {
+          lessonId,
+          userId,
+          status: SubmissionStatus.PENDING,
+          version: nextVersion,
+          contentText: normalizedText || null,
+          createdBy: userId,
+          updatedBy: null,
+        }),
+      );
+
+      const createdFiles: SubmissionFileEntity[] = [];
+      const submissionFolderId = uploadedFiles.length > 0
+        ? await this.assignmentStorageService.ensureSubmissionFolder({
+          submissionId: submission.id,
+          version: submission.version,
+          username,
+          courseSlug: folderContext?.courseSlug,
+          lessonSlug: folderContext?.lessonSlug,
+          lessonId,
+        })
+        : null;
+
+      for (const file of uploadedFiles) {
+        const sanitizedFileName = this.sanitizeFilename(file.originalname);
+        const driveResult = await this.assignmentStorageService.uploadSubmissionFile(
+          file,
+          sanitizedFileName,
+          submission.id,
+          submissionFolderId || undefined,
+        );
+        uploadedDriveFileIds.push(driveResult.driveFileId);
+
+        const fileEntity = await queryRunner.manager.save(
+          queryRunner.manager.create(SubmissionFileEntity, {
+            submissionId: submission.id,
+            fileName: sanitizedFileName,
+            fileMimetype: driveResult.fileMimetype,
+            driveFileId: driveResult.driveFileId,
+            driveUrl: driveResult.driveUrl,
+            createdBy: userId,
+            updatedBy: null,
+          }),
+        );
+
+        createdFiles.push(fileEntity);
+      }
+
+      const savedFileCount = await queryRunner.manager.count(SubmissionFileEntity, {
+        where: { submissionId: submission.id },
+      });
+
+      if (savedFileCount !== uploadedFiles.length) {
+        throw new ServiceUnavailableException(
+          'Submission integrity check failed',
+        );
+      }
+
+      submission.status = SubmissionStatus.WAITING;
+      submission.updatedBy = userId;
+      const finalizedSubmission = await queryRunner.manager.save(submission);
+
+      await queryRunner.commitTransaction();
+
+      return this.toSubmissionResponse(finalizedSubmission, createdFiles);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await this.safeDeleteDriveFiles(uploadedDriveFileIds);
+
+      if (this.isWaitingUniqueViolation(error)) {
+        if (retryCount < 1) {
+          await this.submissionRepo
+            .createQueryBuilder()
+            .update(Submission)
+            .set({
+              status: SubmissionStatus.SUPERSEDED,
+              updatedBy: userId,
+              updatedAt: () => 'NOW()',
+            })
+            .where('user_id = :userId', { userId })
+            .andWhere('lesson_id = :lessonId', { lessonId })
+            .andWhere('status = :pending', { pending: SubmissionStatus.PENDING })
+            .execute();
+
+          return this.submitAssignment(
+            lessonId,
+            userId,
+            contentText,
+            files,
+            fileCount,
+            username,
+            folderContext,
+            retryCount + 1,
+          );
+        }
+
+        throw new HttpException(
+          'A PENDING submission already exists for this lesson',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+
+      throw new ServiceUnavailableException(
+        'Submission synchronization failed. Please retry later.',
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async submitAssignmentBySlugs(
     courseSlug: string,
     lessonSlug: string,
     userId: string,
-  ): Promise<AssignmentSubmissionResponseDto | null> {
-    const lesson = await this.findOrCreateLessonBySlugs(courseSlug, lessonSlug);
-    const latestSubmission = await this.submissionRepo.findOne({
-      where: { lessonId: lesson.id, userId },
-      order: { createdAt: 'DESC' },
-    });
-    if (!latestSubmission) return null;
-    const latestFiles = await this.submissionFileRepo.find({
-      where: { submissionId: latestSubmission.id },
-      order: { createdAt: 'ASC' },
-    });
-    return this.toSubmissionResponse(latestSubmission, latestFiles);
+    contentText: string | undefined,
+    files: SubmissionFile[] = [],
+    fileCount?: number,
+    username?: string,
+    retryCount = 0,
+  ): Promise<AssignmentSubmissionResponseDto> {
+    const lesson = await this.findLessonBySlugsOrFail(courseSlug, lessonSlug);
+
+    return this.submitAssignment(
+      lesson.id,
+      userId,
+      contentText,
+      files,
+      fileCount,
+      username,
+      {
+        courseSlug,
+        lessonSlug,
+      },
+      retryCount,
+    );
+  }
+
+  async getSubmissionStateBySlugs(
+    courseSlug: string,
+    lessonSlug: string,
+    userId: string,
+  ): Promise<AssignmentSubmissionStateDto> {
+    const lesson = await this.findLessonBySlugsOrFail(courseSlug, lessonSlug);
+
+    return this.getSubmissionState(lesson.id, userId);
+  }
+
+  private normalizeSlugs(courseSlug: string, lessonSlug: string): {
+    courseSlug: string;
+    lessonSlug: string;
+  } {
+    const normalizedCourseSlug = courseSlug.trim();
+    const normalizedLessonSlug = lessonSlug.trim();
+
+    if (!normalizedCourseSlug || !normalizedLessonSlug) {
+      throw new NotFoundException('Lesson not found');
+    }
+
+    return {
+      courseSlug: normalizedCourseSlug,
+      lessonSlug: normalizedLessonSlug,
+    };
+  }
+
+  private async findLessonBySlugs(
+    courseSlug: string,
+    lessonSlug: string,
+  ): Promise<Pick<Lesson, 'id'> | null> {
+    const normalized = this.normalizeSlugs(courseSlug, lessonSlug);
+
+    return this.lessonRepo
+      .createQueryBuilder('lesson')
+      .innerJoin('lesson.course', 'course')
+      .select(['lesson.id'])
+      .where('course.slug = :courseSlug', { courseSlug: normalized.courseSlug })
+      .andWhere('lesson.slug = :lessonSlug', { lessonSlug: normalized.lessonSlug })
+      .getOne();
+  }
+
+  private async findLessonBySlugsOrFail(
+    courseSlug: string,
+    lessonSlug: string,
+  ): Promise<Pick<Lesson, 'id'>> {
+    const lesson = await this.findLessonBySlugs(courseSlug, lessonSlug);
+    if (!lesson) {
+      throw new NotFoundException('Lesson not found');
+    }
+
+    return lesson;
   }
 
   async getSubmissionState(
@@ -506,7 +512,7 @@ export class AssignmentsService {
           .where('id = :submissionId', { submissionId: submission.id })
           .execute();
 
-        // Keep DB audit rows while removing Drive pointers; Drive files are removed by orphan scan after DB purge.
+        // Keep DB audit rows while removing Drive pointers; Drive files were already deleted above before archiving.
         await manager
           .createQueryBuilder()
           .update(SubmissionFileEntity)

@@ -93,9 +93,9 @@ export class KeycloakStrategy extends PassportStrategy(Strategy, 'keycloak') {
       firstName: payload.given_name ?? '',
       lastName: payload.family_name ?? '',
       name:
-        payload.name ??
-        [payload.given_name, payload.family_name].filter(Boolean).join(' ') ??
-        payload.preferred_username ??
+        payload.name ||
+        [payload.given_name, payload.family_name].filter(Boolean).join(' ') ||
+        payload.preferred_username ||
         payload.sub,
       roles: dedupedRoles,
       realmRoles,

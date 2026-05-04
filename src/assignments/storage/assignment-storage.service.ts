@@ -38,16 +38,10 @@ interface SubmissionFolderContext {
 @Injectable()
 export class AssignmentStorageService {
   private driveClient: drive_v3.Drive | null = null;
-  private readonly submissionFolderCache = new Map<string, string>();
 
   constructor(private readonly configService: ConfigService) {}
 
   async ensureSubmissionFolder(context: SubmissionFolderContext): Promise<string> {
-    const cachedFolderId = this.submissionFolderCache.get(context.submissionId);
-    if (cachedFolderId) {
-      return cachedFolderId;
-    }
-
     const drive = this.getDriveClient();
     const rootFolderId = this.configService.get<string>('submissions.driveFolderId');
     const folderName = this.buildSubmissionFolderName(context);
@@ -69,7 +63,6 @@ export class AssignmentStorageService {
       throw new InternalServerErrorException('Drive folder creation returned no id');
     }
 
-    this.submissionFolderCache.set(context.submissionId, folderId);
     return folderId;
   }
 
