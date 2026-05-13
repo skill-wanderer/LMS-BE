@@ -4,10 +4,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { AssignmentsService } from '../assignments.service';
 
-/**
- * Service chạy cron job định kỳ để dọn dẹp submission superseded (chuyển sang archived)
- * và xóa submission archived quá lâu khỏi DB
- */
+
 @Injectable()
 export class SupersededCleanupService implements OnModuleInit {
   private readonly logger = new Logger(SupersededCleanupService.name);

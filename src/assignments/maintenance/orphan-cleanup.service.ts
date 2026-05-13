@@ -4,10 +4,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { AssignmentsService } from '../assignments.service';
 
-/**
- * Service chạy cron job định kỳ để dọn dẹp file trên Google Drive không còn submission (orphan)
- * Chỉ chạy khi submissions.driveEnabled = true
- */
+
 @Injectable()
 export class OrphanCleanupService implements OnModuleInit {
   private readonly logger = new Logger(OrphanCleanupService.name);
