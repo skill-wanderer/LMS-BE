@@ -84,6 +84,12 @@ export class KeycloakStrategy extends PassportStrategy(Strategy, 'keycloak') {
     }
 
     const dedupedRoles = Array.from(new Set([...realmRoles, ...clientRoles]));
+    const fullName = [payload.given_name, payload.family_name]
+      .filter((part): part is string => Boolean(part?.trim()))
+      .join(' ')
+      .trim();
+    const explicitName = payload.name?.trim();
+    const fallbackUsername = payload.preferred_username?.trim() || payload.sub;
 
     return {
       id: payload.sub,
@@ -92,11 +98,7 @@ export class KeycloakStrategy extends PassportStrategy(Strategy, 'keycloak') {
       username: payload.preferred_username ?? payload.sub,
       firstName: payload.given_name ?? '',
       lastName: payload.family_name ?? '',
-      name:
-        payload.name ||
-        [payload.given_name, payload.family_name].filter(Boolean).join(' ') ||
-        payload.preferred_username ||
-        payload.sub,
+      name: explicitName || fullName || fallbackUsername,
       roles: dedupedRoles,
       realmRoles,
       clientRoles,
