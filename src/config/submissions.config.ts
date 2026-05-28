@@ -20,16 +20,6 @@ export default registerAs('submissions', () => ({
   maxFileSizeMb: parseNumber(process.env.SUBMISSIONS_MAX_FILE_SIZE_MB, 10),
   maxFiles: parseNumber(process.env.SUBMISSIONS_MAX_FILES, 10),
   antiSpamWindowSeconds: parseNumber(process.env.SUBMISSIONS_ANTI_SPAM_WINDOW_SECONDS, 30),
-  retentionDays: parseNumber(process.env.SUBMISSIONS_RETENTION_DAYS, 30),
-  archivedPurgeDays: parseNumber(process.env.SUBMISSIONS_ARCHIVED_PURGE_DAYS, 0),
-  cleanupBatchSize: parseNumber(process.env.SUBMISSIONS_CLEANUP_BATCH_SIZE, 100),
-  orphanScanBatchSize: parseNumber(process.env.SUBMISSIONS_ORPHAN_SCAN_BATCH_SIZE, 100),
-  cleanupSchedule: process.env.SUBMISSIONS_CLEANUP_SCHEDULE || '*/5 * * * *',
-  orphanScanSchedule: process.env.SUBMISSIONS_ORPHAN_SCAN_SCHEDULE || '*/10 * * * *',
-  serverTimezone: process.env.SUBMISSIONS_SERVER_TIMEZONE || process.env.SERVER_TIMEZONE || 'UTC',
-  systemActorId:
-    process.env.SUBMISSIONS_SYSTEM_ACTOR_ID ||
-    '00000000-0000-0000-0000-000000000000',
   allowedMimeTypes: parseList(process.env.SUBMISSIONS_ALLOWED_MIME_TYPES, [
     'application/pdf',
     'text/plain',

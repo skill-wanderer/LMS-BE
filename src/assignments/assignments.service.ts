@@ -4,7 +4,6 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
-  Logger,
   NotFoundException,
   PayloadTooLargeException,
   ServiceUnavailableException,
@@ -29,13 +28,14 @@ import {
 } from './dto/assignment-submission-response.dto';
 import { SubmissionFileEntity } from './entities/submission-file.entity';
 import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
+import { Course } from '../courses/entities/course.entity';
 
 @Injectable()
 export class AssignmentsService {
-  private readonly logger = new Logger(AssignmentsService.name);
-
   constructor(
     private readonly dataSource: DataSource,
+    @InjectRepository(Course)
+    private readonly courseRepo: Repository<Course>,
     @InjectRepository(Lesson)
     private readonly lessonRepo: Repository<Lesson>,
     @InjectRepository(Submission)
@@ -253,7 +253,13 @@ export class AssignmentsService {
       return this.toSubmissionResponse(finalizedSubmission, createdFiles);
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      await this.safeDeleteDriveFiles(uploadedDriveFileIds);
+      for (const driveFileId of uploadedDriveFileIds) {
+        try {
+          await this.assignmentStorageService.deleteDriveFile(driveFileId);
+        } catch {
+          // Best-effort rollback for failed submission transaction.
+        }
+      }
 
       if (this.isWaitingUniqueViolation(error)) {
         if (retryCount < 1) {
@@ -310,7 +316,10 @@ export class AssignmentsService {
     username?: string,
     retryCount = 0,
   ): Promise<AssignmentSubmissionResponseDto> {
-    const lesson = await this.findLessonBySlugsOrFail(courseSlug, lessonSlug);
+    const lesson = await this.findOrCreateLessonBySlugsForSubmission(
+      courseSlug,
+      lessonSlug,
+    );
 
     return this.submitAssignment(
       lesson.id,
@@ -327,6 +336,56 @@ export class AssignmentsService {
     );
   }
 
+  private async findOrCreateLessonBySlugsForSubmission(
+    courseSlug: string,
+    lessonSlug: string,
+  ): Promise<Pick<Lesson, 'id'>> {
+    const normalized = this.normalizeSlugs(courseSlug, lessonSlug);
+    const existingLesson = await this.findLessonBySlugs(
+      normalized.courseSlug,
+      normalized.lessonSlug,
+    );
+
+    if (existingLesson) {
+      return existingLesson;
+    }
+
+    const course = await this.courseRepo
+      .createQueryBuilder('course')
+      .select(['course.id'])
+      .where('LOWER(course.slug) = :courseSlug', {
+        courseSlug: normalized.courseSlug,
+      })
+      .getOne();
+
+    if (!course) {
+      throw new NotFoundException('Lesson not found');
+    }
+
+    try {
+      const createdLesson = await this.lessonRepo.save(
+        this.lessonRepo.create({
+          courseId: course.id,
+          slug: normalized.lessonSlug,
+          title: this.toLessonTitleFromSlug(normalized.lessonSlug),
+        }),
+      );
+
+      return { id: createdLesson.id };
+    } catch {
+      const resolvedLesson = await this.findLessonBySlugs(
+        normalized.courseSlug,
+        normalized.lessonSlug,
+      );
+
+      if (resolvedLesson) {
+        return resolvedLesson;
+      }
+
+      throw new NotFoundException('Lesson not found');
+    }
+  }
+
   async getSubmissionStateBySlugs(
     courseSlug: string,
     lessonSlug: string,
@@ -341,8 +400,8 @@ export class AssignmentsService {
     courseSlug: string;
     lessonSlug: string;
   } {
-    const normalizedCourseSlug = courseSlug.trim();
-    const normalizedLessonSlug = lessonSlug.trim();
+    const normalizedCourseSlug = courseSlug.trim().toLowerCase();
+    const normalizedLessonSlug = lessonSlug.trim().toLowerCase();
 
     if (!normalizedCourseSlug || !normalizedLessonSlug) {
       throw new NotFoundException('Lesson not found');
@@ -364,8 +423,8 @@ export class AssignmentsService {
       .createQueryBuilder('lesson')
       .innerJoin('lesson.course', 'course')
       .select(['lesson.id'])
-      .where('course.slug = :courseSlug', { courseSlug: normalized.courseSlug })
-      .andWhere('lesson.slug = :lessonSlug', { lessonSlug: normalized.lessonSlug })
+      .where('LOWER(course.slug) = :courseSlug', { courseSlug: normalized.courseSlug })
+      .andWhere('LOWER(lesson.slug) = :lessonSlug', { lessonSlug: normalized.lessonSlug })
       .getOne();
   }
 
@@ -450,154 +509,6 @@ export class AssignmentsService {
     });
 
     return this.toSubmissionResponse(savedSubmission, savedFiles);
-  }
-
-  async cleanupSupersededSubmissions(): Promise<number> {
-    const retentionDays = this.configService.get<number>('submissions.retentionDays', 30);
-    const cleanupBatchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
-    const systemActor = this.configService.get<string>(
-      'submissions.systemActorId',
-      '00000000-0000-0000-0000-000000000000',
-    );
-
-    const candidates = await this.submissionRepo
-      .createQueryBuilder('submission')
-      .where('submission.status = :superseded', {
-        superseded: SubmissionStatus.SUPERSEDED,
-      })
-      .andWhere("submission.updated_at < NOW() - (:retentionDays || ' days')::interval", {
-        retentionDays,
-      })
-      .orderBy('submission.updated_at', 'ASC')
-      .limit(cleanupBatchSize)
-      .getMany();
-
-    let archivedCount = 0;
-
-    for (const submission of candidates) {
-      const submissionFiles = await this.submissionFileRepo.find({
-        where: { submissionId: submission.id },
-      });
-
-      const driveFileIds = submissionFiles
-        .map((file) => file.driveFileId)
-        .filter((driveFileId): driveFileId is string => Boolean(driveFileId));
-
-      let driveDeletionFailed = false;
-      for (const driveFileId of driveFileIds) {
-        try {
-          await this.assignmentStorageService.deleteDriveFile(driveFileId);
-        } catch (error) {
-          driveDeletionFailed = true;
-          this.logger.warn(
-            `Failed to delete Drive file ${driveFileId} for submission ${submission.id}: ${(error as Error)?.message || 'unknown error'}`,
-          );
-          break;
-        }
-      }
-
-      if (driveDeletionFailed) {
-        continue;
-      }
-
-      await this.dataSource.transaction(async (manager) => {
-        await manager
-          .createQueryBuilder()
-          .update(Submission)
-          .set({
-            status: SubmissionStatus.ARCHIVED,
-            updatedBy: systemActor,
-            updatedAt: () => 'NOW()',
-          })
-          .where('id = :submissionId', { submissionId: submission.id })
-          .execute();
-
-        // Keep DB audit rows while removing Drive pointers; Drive files were already deleted above before archiving.
-        await manager
-          .createQueryBuilder()
-          .update(SubmissionFileEntity)
-          .set({
-            driveFileId: null,
-            driveUrl: null,
-            updatedBy: systemActor,
-            updatedAt: () => 'NOW()',
-          })
-          .where('submission_id = :submissionId', { submissionId: submission.id })
-          .execute();
-      });
-
-      archivedCount += 1;
-    }
-
-    return archivedCount;
-  }
-
-  async cleanupOrphanDriveFiles(): Promise<number> {
-    const driveEnabled = this.configService.get<boolean>('submissions.driveEnabled', false);
-    if (!driveEnabled) {
-      return 0;
-    }
-
-    const orphanScanBatchSize = this.configService.get<number>('submissions.orphanScanBatchSize', 100);
-    const candidates = await this.assignmentStorageService.listOrphanCandidates(orphanScanBatchSize);
-    let deletedCount = 0;
-
-    for (const candidate of candidates) {
-      const exists = await this.submissionRepo.exists({
-        where: { id: candidate.submissionId },
-      });
-
-      if (!exists) {
-        await this.safeDeleteDriveFiles([candidate.driveFileId]);
-        deletedCount += 1;
-      }
-    }
-
-    return deletedCount;
-  }
-
-  async cleanupArchivedSubmissions(): Promise<number> {
-    const purgeDays = this.configService.get<number>('submissions.archivedPurgeDays', 0);
-    if (purgeDays <= 0) {
-      return 0;
-    }
-
-    const cleanupBatchSize = this.configService.get<number>('submissions.cleanupBatchSize', 100);
-
-    const candidates = await this.submissionRepo
-      .createQueryBuilder('submission')
-      .select('submission.id', 'id')
-      .where('submission.status = :archived', {
-        archived: SubmissionStatus.ARCHIVED,
-      })
-      .andWhere("submission.updated_at < NOW() - (:purgeDays || ' days')::interval", {
-        purgeDays,
-      })
-      .orderBy('submission.updated_at', 'ASC')
-      .limit(cleanupBatchSize)
-      .getRawMany<{ id: string }>();
-
-    if (candidates.length === 0) {
-      return 0;
-    }
-
-    const ids = candidates.map((candidate) => candidate.id);
-
-    await this.submissionFileRepo
-      .createQueryBuilder()
-      .delete()
-      .from(SubmissionFileEntity)
-      .where('submission_id IN (:...ids)', { ids })
-      .execute();
-
-    await this.submissionRepo
-      .createQueryBuilder()
-      .delete()
-      .from(Submission)
-      .where('id IN (:...ids)', { ids })
-      .execute();
-
-    return ids.length;
   }
 
   private validateFiles(files: SubmissionFile[]): void {
@@ -714,16 +625,12 @@ export class AssignmentsService {
     }
   }
 
-  private async safeDeleteDriveFiles(driveFileIds: string[]): Promise<void> {
-    for (const driveFileId of driveFileIds) {
-      try {
-        await this.assignmentStorageService.deleteDriveFile(driveFileId);
-      } catch (error) {
-        // Best-effort cleanup; grace period job will retry failed deletions
-        this.logger.warn(
-          `Failed to delete Drive file ${driveFileId}: ${(error as Error)?.message || 'unknown error'}`,
-        );
-      }
-    }
+  private toLessonTitleFromSlug(slug: string): string {
+    return slug
+      .split('-')
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   }
+
 }

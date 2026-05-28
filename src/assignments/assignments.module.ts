@@ -7,14 +7,13 @@ import { AssignmentStorageService } from './storage/assignment-storage.service';
 import { SubmissionFileEntity } from './entities/submission-file.entity';
 import { Lesson } from '../lessons/entities/lesson.entity';
 import { Course } from '../courses/entities/course.entity';
-import { SupersededCleanupService, OrphanCleanupService } from './maintenance';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Course, Lesson, Submission, SubmissionFileEntity]),
   ],
   controllers: [AssignmentsController],
-  providers: [AssignmentsService, AssignmentStorageService, SupersededCleanupService, OrphanCleanupService],
+  providers: [AssignmentsService, AssignmentStorageService],
   exports: [AssignmentsService],
 })
 export class AssignmentsModule {}
