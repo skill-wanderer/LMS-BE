@@ -8,6 +8,7 @@ import {
   Post,
   Param,
   UploadedFiles,
+  UseFilters,
   UseInterceptors,
 } from '@nestjs/common';
 import {
@@ -32,10 +33,12 @@ import {
 } from './dto/assignment-submission-response.dto';
 import { UpdateSubmissionStatusDto } from './dto/update-submission-status.dto';
 import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
+import { SubmissionUploadExceptionFilter } from './filters/submission-upload-exception.filter';
 
 @ApiTags('Lesson Submissions')
 @ApiBearerAuth('keycloak')
 @Controller()
+@UseFilters(SubmissionUploadExceptionFilter)
 export class AssignmentsController {
   constructor(private readonly assignmentsService: AssignmentsService) {}
 
