@@ -1,4 +1,8 @@
 import { registerAs } from '@nestjs/config';
+import { config as loadEnvFile } from 'dotenv';
+import { resolve } from 'path';
+
+loadEnvFile({ path: resolve(process.cwd(), '.env') });
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
   const parsed = Number(value);
