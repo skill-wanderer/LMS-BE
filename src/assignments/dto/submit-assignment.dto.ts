@@ -1,11 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { getSubmissionSettingsFromEnv } from '../../config/submissions.config';
+
+const dtoSubmissionLimits = getSubmissionSettingsFromEnv();
 
 export class SubmitAssignmentDto {
   @ApiPropertyOptional({
     description: 'Optional plain text answer for the submission',
-    maxLength: 10000,
+    maxLength: dtoSubmissionLimits.maxContentLength,
     example: 'My assignment answer in plain text.',
   })
   @IsOptional()
@@ -18,19 +21,19 @@ export class SubmitAssignmentDto {
     return typeof alias === 'string' ? alias : value;
   })
   @IsString()
-  @MaxLength(10000)
+  @MaxLength(dtoSubmissionLimits.maxContentLength)
   contentText?: string;
 
   @ApiPropertyOptional({
     description: 'Optional expected number of uploaded files',
     minimum: 0,
-    maximum: 10,
+    maximum: dtoSubmissionLimits.maxFiles,
     example: 2,
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => (value !== undefined && value !== '' ? Number(value) : undefined))
   @IsInt()
   @Min(0)
-  @Max(10)
+  @Max(dtoSubmissionLimits.maxFiles)
   fileCount?: number;
 }

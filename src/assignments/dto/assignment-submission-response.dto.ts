@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SubmissionStatus } from '../entities/assignment-submission.entity';
+import { getSubmissionSettingsFromEnv } from '../../config/submissions.config';
+
+const submissionResponseLimits = getSubmissionSettingsFromEnv();
 
 export enum SubmissionStateStatus {
   ACTIVE = 'ACTIVE',
@@ -13,13 +16,16 @@ export class SubmissionFileResponseDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ maxLength: 500 })
+  @ApiProperty({ maxLength: submissionResponseLimits.fileNameMaxLength })
   fileName!: string;
 
-  @ApiProperty({ maxLength: 255 })
+  @ApiProperty({ maxLength: submissionResponseLimits.fileMimetypeMaxLength })
   fileMimetype!: string;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({
+    nullable: true,
+    maxLength: submissionResponseLimits.driveFileIdMaxLength,
+  })
   driveFileId!: string | null;
 
   @ApiPropertyOptional({ nullable: true })

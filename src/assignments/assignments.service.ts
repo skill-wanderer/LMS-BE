@@ -29,6 +29,7 @@ import {
 import { SubmissionFileEntity } from './entities/submission-file.entity';
 import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 import { Course } from '../courses/entities/course.entity';
+import { submissionDefaults } from '../config/submissions.config';
 
 @Injectable()
 export class AssignmentsService {
@@ -48,18 +49,21 @@ export class AssignmentsService {
 
   getSubmissionConstraints(): SubmissionConstraintsDto {
     return {
-      maxFiles: this.configService.get<number>('submissions.maxFiles', 10),
-      maxFileSizeMb: this.configService.get<number>('submissions.maxFileSizeMb', 10),
+      maxContentLength: this.configService.get<number>(
+        'submissions.maxContentLength',
+        submissionDefaults.maxContentLength,
+      ),
+      maxFiles: this.configService.get<number>(
+        'submissions.maxFiles',
+        submissionDefaults.maxFiles,
+      ),
+      maxFileSizeMb: this.configService.get<number>(
+        'submissions.maxFileSizeMb',
+        submissionDefaults.maxFileSizeMb,
+      ),
       allowedMimeTypes: this.configService.get<string[]>(
         'submissions.allowedMimeTypes',
-        [
-          'application/pdf',
-          'text/plain',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          'image/png',
-          'image/jpeg',
-        ],
+        [...submissionDefaults.allowedMimeTypes],
       ),
     };
   }
@@ -76,11 +80,24 @@ export class AssignmentsService {
   ): Promise<AssignmentSubmissionResponseDto> {
     const normalizedText = contentText?.trim() || '';
     const uploadedFiles = files || [];
-    const maxFiles = this.configService.get<number>('submissions.maxFiles', 10);
+    const maxFiles = this.configService.get<number>(
+      'submissions.maxFiles',
+      submissionDefaults.maxFiles,
+    );
+    const maxContentLength = this.configService.get<number>(
+      'submissions.maxContentLength',
+      submissionDefaults.maxContentLength,
+    );
 
     if (uploadedFiles.length > maxFiles) {
       throw new BadRequestException(
         `File count exceeds limit (${maxFiles})`,
+      );
+    }
+
+    if (normalizedText.length > maxContentLength) {
+      throw new BadRequestException(
+        `contentText exceeds maximum length (${maxContentLength})`,
       );
     }
 
@@ -108,7 +125,7 @@ export class AssignmentsService {
 
     const antiSpamWindowSeconds = this.configService.get<number>(
       'submissions.antiSpamWindowSeconds',
-      30,
+      submissionDefaults.antiSpamWindowSeconds,
     );
     const lastSubmission = await this.submissionRepo.findOne({
       where: { lessonId, userId },
@@ -512,20 +529,15 @@ export class AssignmentsService {
   }
 
   private validateFiles(files: SubmissionFile[]): void {
-    const maxFileSizeMb = this.configService.get<number>('submissions.maxFileSizeMb', 10);
-    const maxFileSizeBytes = maxFileSizeMb * 1024 * 1024;
-
+    const maxFileSizeMb = this.configService.get<number>(
+      'submissions.maxFileSizeMb',
+      submissionDefaults.maxFileSizeMb,
+    );
     const allowedMimeTypes = this.configService.get<string[]>(
       'submissions.allowedMimeTypes',
-      [
-        'application/pdf',
-        'text/plain',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'image/png',
-        'image/jpeg',
-      ],
+      [...submissionDefaults.allowedMimeTypes],
     );
+    const maxFileSizeBytes = maxFileSizeMb * 1024 * 1024;
 
     for (const file of files) {
       if (file.size > maxFileSizeBytes) {
@@ -543,6 +555,10 @@ export class AssignmentsService {
   }
 
   private sanitizeFilename(fileName: string): string {
+    const maxFileNameLength = this.configService.get<number>(
+      'submissions.fileNameMaxLength',
+      submissionDefaults.fileNameMaxLength,
+    );
     const baseName = fileName.split(/[\\/]/).pop() || fileName;
     const cleaned = baseName
       .normalize('NFKD')
@@ -550,7 +566,7 @@ export class AssignmentsService {
       .replace(/[^a-zA-Z0-9._-]/g, '_')
       .replace(/_+/g, '_');
 
-    return cleaned.slice(0, 200) || 'uploaded_file';
+    return cleaned.slice(0, maxFileNameLength) || 'uploaded_file';
   }
 
   private isWaitingUniqueViolation(error: unknown): boolean {

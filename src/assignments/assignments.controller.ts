@@ -34,6 +34,9 @@ import {
 import { UpdateSubmissionStatusDto } from './dto/update-submission-status.dto';
 import { SubmissionConstraintsDto } from './dto/submission-constraints.dto';
 import { SubmissionUploadExceptionFilter } from './filters/submission-upload-exception.filter';
+import { getSubmissionSettingsFromEnv } from '../config/submissions.config';
+
+const submissionControllerLimits = getSubmissionSettingsFromEnv();
 
 @ApiTags('Lesson Submissions')
 @ApiBearerAuth('keycloak')
@@ -108,10 +111,10 @@ export class AssignmentsController {
 
   @Post('lessons/:lessonId/submissions')
   @UseInterceptors(
-    FilesInterceptor('files', 10, {
+    FilesInterceptor('files', submissionControllerLimits.maxFiles, {
       storage: memoryStorage(),
       limits: {
-        fileSize: 10 * 1024 * 1024,
+        fileSize: submissionControllerLimits.maxFileSizeMb * 1024 * 1024,
       },
     }),
   )
@@ -127,10 +130,12 @@ export class AssignmentsController {
         contentText: {
           type: 'string',
           description: 'Optional plain text answer',
+          maxLength: submissionControllerLimits.maxContentLength,
         },
         fileCount: {
           type: 'integer',
           minimum: 0,
+          maximum: submissionControllerLimits.maxFiles,
           description: 'Optional expected file count for integrity check',
         },
         files: {
@@ -139,7 +144,7 @@ export class AssignmentsController {
             type: 'string',
             format: 'binary',
           },
-          description: 'Optional file uploads (max 10 files)',
+          description: `Optional file uploads (max ${submissionControllerLimits.maxFiles} files)`,
         },
       },
     },
@@ -177,10 +182,10 @@ export class AssignmentsController {
 
   @Post('courses/:courseSlug/lessons/:lessonSlug/submissions')
   @UseInterceptors(
-    FilesInterceptor('files', 10, {
+    FilesInterceptor('files', submissionControllerLimits.maxFiles, {
       storage: memoryStorage(),
       limits: {
-        fileSize: 10 * 1024 * 1024,
+        fileSize: submissionControllerLimits.maxFileSizeMb * 1024 * 1024,
       },
     }),
   )
@@ -197,10 +202,12 @@ export class AssignmentsController {
         contentText: {
           type: 'string',
           description: 'Optional plain text answer',
+          maxLength: submissionControllerLimits.maxContentLength,
         },
         fileCount: {
           type: 'integer',
           minimum: 0,
+          maximum: submissionControllerLimits.maxFiles,
           description: 'Optional expected file count for integrity check',
         },
         files: {
@@ -209,7 +216,7 @@ export class AssignmentsController {
             type: 'string',
             format: 'binary',
           },
-          description: 'Optional file uploads (max 10 files)',
+          description: `Optional file uploads (max ${submissionControllerLimits.maxFiles} files)`,
         },
       },
     },
