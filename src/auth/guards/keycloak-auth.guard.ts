@@ -1,13 +1,17 @@
 import {
   Injectable,
   ExecutionContext,
+  InternalServerErrorException,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { Observable } from 'rxjs';
+import { firstValueFrom, isObservable, Observable } from 'rxjs';
+import { UsersService } from '../../users/users.service';
+import { AuthenticatedUser } from '../interfaces/keycloak-token.interface';
+import { UserActivityWorkerService } from '../../users/user-activity-worker.service';
 
 /**
  * Global auth guard that validates Keycloak JWT tokens.
@@ -17,13 +21,17 @@ import { Observable } from 'rxjs';
 export class KeycloakAuthGuard extends AuthGuard('keycloak') {
   private readonly logger = new Logger(KeycloakAuthGuard.name);
 
-  constructor(private reflector: Reflector) {
+  constructor(
+    private reflector: Reflector,
+    private readonly usersService: UsersService,
+    private readonly userActivityWorkerService: UserActivityWorkerService,
+  ) {
     super();
   }
 
-  canActivate(
+  async canActivate(
     context: ExecutionContext,
-  ): boolean | Promise<boolean> | Observable<boolean> {
+  ): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -33,7 +41,29 @@ export class KeycloakAuthGuard extends AuthGuard('keycloak') {
       return true;
     }
 
-    return super.canActivate(context);
+    const activationResult = super.canActivate(context);
+    const authenticated = isObservable(activationResult)
+      ? await firstValueFrom(activationResult)
+      : await activationResult;
+
+    if (!authenticated) {
+      return false;
+    }
+
+    const request = context.switchToHttp().getRequest();
+    const user = request?.user as AuthenticatedUser | undefined;
+
+    if (!user) {
+      this.logger.error('Authentication succeeded but request.user is missing');
+      throw new InternalServerErrorException(
+        'Authenticated user context is unavailable',
+      );
+    }
+
+    await this.usersService.upsertFromKeycloakUser(user);
+    this.recordActivityInBackground(user, request);
+
+    return true;
   }
 
   handleRequest<TUser = unknown>(
@@ -61,6 +91,48 @@ export class KeycloakAuthGuard extends AuthGuard('keycloak') {
     }
 
     return user;
+  }
+
+  private recordActivityInBackground(
+    user: AuthenticatedUser,
+    request: {
+      method?: string;
+      baseUrl?: string;
+      originalUrl?: string;
+      route?: { path?: string };
+      url?: string;
+    },
+  ): void {
+    const actionName = this.resolveActionName(request);
+
+    try {
+      this.userActivityWorkerService.dispatchActivity(user.id, actionName);
+    } catch (error) {
+      this.logger.warn(`Failed to dispatch activity worker for user ${user.id}`, {
+        actionName,
+        error: this.formatAuthError(error),
+      });
+    }
+  }
+
+  private resolveActionName(request: {
+    method?: string;
+    baseUrl?: string;
+    originalUrl?: string;
+    route?: { path?: string };
+    url?: string;
+  }): string {
+    const method = request.method?.toUpperCase()?.trim() || 'UNKNOWN';
+    const routePath = request.route?.path?.trim();
+    const baseUrl = request.baseUrl?.trim() || '';
+
+    if (routePath) {
+      return `${method} ${baseUrl}${routePath}`;
+    }
+
+    const rawPath = request.originalUrl?.trim() || request.url?.trim() || '/';
+    const pathOnly = rawPath.split('?')[0] || '/';
+    return `${method} ${pathOnly}`;
   }
 
   private formatAuthError(value: unknown): unknown {

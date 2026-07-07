@@ -6,9 +6,10 @@ import { AuthService } from './auth.service';
 import { KeycloakStrategy } from './strategies/keycloak.strategy';
 import { KeycloakAuthGuard } from './guards/keycloak-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [PassportModule.register({ defaultStrategy: 'keycloak' })],
+  imports: [PassportModule.register({ defaultStrategy: 'keycloak' }), UsersModule],
   controllers: [AuthController],
   providers: [
     AuthService,

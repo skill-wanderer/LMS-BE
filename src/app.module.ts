@@ -7,15 +7,18 @@ import { QuizScoresModule } from './quiz-scores/quiz-scores.module';
 import keycloakConfig from './config/keycloak.config';
 import submissionsConfig from './config/submissions.config';
 import { AssignmentsModule } from './assignments/assignments.module';
+import { UsersModule } from './users/users.module';
+import usersConfig from './config/users.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [keycloakConfig, submissionsConfig],
+      load: [keycloakConfig, submissionsConfig, usersConfig],
       envFilePath: '.env',
     }),
     DatabaseModule,
+    UsersModule,
     AuthModule,
     ProgressModule,
     QuizScoresModule,
